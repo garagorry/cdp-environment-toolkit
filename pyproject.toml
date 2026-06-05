@@ -1,0 +1,25 @@
+[project]
+name = "cdp-discover"
+version = "0.2.0"
+description = "CDP Environment Toolkit — discover CDP resources and generate upgrade-planning Excel reports"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+report = ["openpyxl>=3.1.0"]
+
+[project.scripts]
+cdp-discover = "cdp_discover.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/garagorry/cdp-environment-toolkit"
+Repository = "https://github.com/garagorry/cdp-environment-toolkit"
+Issues = "https://github.com/garagorry/cdp-environment-toolkit/issues"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

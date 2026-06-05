@@ -57,9 +57,24 @@ htmlcov/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Discovery output (if someone runs with custom output dir)
+# Local-only workspace (docs, samples, reports, archives — never publish)
+_local/
+
+# Discovery output (never commit run artifacts)
 discovery_env_*/
+discovery_account-*/
 *.tar.gz
+/environment/
+/datalake/
+/datahub/
+/cde/
+/cai/
+/cdw/
+/cdf/
+/cod/
+/Samples/
+UpgradePlanning_*.xlsx
+*.xlsx
 
 # Logs
 *.log
@@ -69,4 +84,3 @@ discovery_env_*/
 *.bak
 *.swp
 .~*
-
