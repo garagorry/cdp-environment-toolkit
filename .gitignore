@@ -75,6 +75,8 @@ discovery_account-*/
 /Samples/
 UpgradePlanning_*.xlsx
 *.xlsx
+# Raw credential payloads (only written with --include-secrets)
+*_Kubeconfig_*.json
 
 # Logs
 *.log

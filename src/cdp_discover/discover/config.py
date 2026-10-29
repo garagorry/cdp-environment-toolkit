@@ -20,6 +20,7 @@ class DiscoveryConfig:
         full=False,
         exhaustive=False,
         download_diagnostics=False,
+        include_secrets=False,
         timestamp=None,
         append_timestamp=True,
     ):
@@ -33,6 +34,7 @@ class DiscoveryConfig:
             debug: Enable debug output
             include_services: List of specific services to include (None = all)
             exclude_services: List of services to exclude
+            include_secrets: Also write raw credential payloads (e.g. CDE kubeconfig)
             timestamp: Shared run timestamp (account-wide discovery); generated if omitted
             append_timestamp: When True and output_dir is set, suffix output_dir with timestamp
         """
@@ -42,6 +44,7 @@ class DiscoveryConfig:
         self.full = full or exhaustive
         self.exhaustive = exhaustive
         self.download_diagnostics = download_diagnostics and exhaustive
+        self.include_secrets = include_secrets
         self.deep = deep or full or exhaustive
         self.timestamp = timestamp or datetime.now().strftime("%Y%m%d%H%M%S")
         

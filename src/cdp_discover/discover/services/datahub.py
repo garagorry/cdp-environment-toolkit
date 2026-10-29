@@ -5,7 +5,13 @@ from pathlib import Path
 import json
 
 
-from cdp_discover.discover.utils import log, save_to_file, run_command_json, save_recipe_script
+from cdp_discover.discover.utils import (
+    check_expected_fields,
+    log,
+    run_command_json,
+    save_recipe_script,
+    save_to_file,
+)
 from cdp_discover.discover.exporters.csv_exporter import CSVExporter
 from cdp_discover.discover.diagnostics import save_diagnostic_collect, save_diagnostic_job_describes
 
@@ -138,7 +144,11 @@ class DatahubDiscovery:
         save_to_file(describe, json_path)
         
         cluster_obj = describe.get("cluster", {})
-        
+        missing = check_expected_fields(
+            cluster_obj, ["clouderaManager.platformVersion"], f"Data Hub {name}"
+        )
+        self.client.note_missing_fields("datahub", name, missing)
+
         # 2. Instance groups
         instance_groups = cluster_obj.get("instanceGroups", [])
         rows = self._flatten_instance_groups(name, instance_groups)
@@ -165,15 +175,9 @@ class DatahubDiscovery:
         # 5. Check upgrade images
         self._check_upgrade_images(crn, name, cluster_dir, output_prefix)
         
-        # 6. Database server
-        db_server, db_err = self.client.describe_datahub_database_server(crn)
-        if db_server:
-            db_path = cluster_dir / f"{output_prefix}_DB_{self.config.timestamp}.json"
-            save_to_file(db_server, db_path)
-        else:
-            if self.config.debug:
-                log(f"DEBUG: Could not describe DB server for {name}: {db_err}")
-        
+        # 6. Database server details are part of describe-cluster (the datahub
+        #    service has no describe-database-server operation)
+
         # 7. Cluster service status
         status_json, status_err = self.client.get_datahub_cluster_service_status(crn)
         if status_json:
@@ -184,8 +188,8 @@ class DatahubDiscovery:
         elif self.config.debug:
             log(f"DEBUG: DataHub service status for {name}: {status_err}")
         
-        # 8. Lifecycle events
-        lifecycle_json, lifecycle_err = self.client.list_datahub_cluster_lifecycle_events(crn)
+        # 8. Lifecycle events (the API resolves --cluster by name, not CRN)
+        lifecycle_json, lifecycle_err = self.client.list_datahub_cluster_lifecycle_events(name)
         if lifecycle_json:
             lifecycle_path = cluster_dir / f"{output_prefix}_LifecycleEvents_{self.config.timestamp}.json"
             save_to_file(lifecycle_json, lifecycle_path)

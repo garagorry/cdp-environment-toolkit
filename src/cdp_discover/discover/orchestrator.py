@@ -70,6 +70,8 @@ class EnvironmentDiscoveryOrchestrator:
         log(f"📂 Output directory: {self.config.output_dir}")
         log(f"🔧 CDP Profile: {self.config.profile}")
         log(f"📊 Discovery tier: {self.config.discovery_tier}")
+        log(f"🧰 CDP CLI: {self.client.cli_version or 'unknown'} (form factor: {self.client.form_factor})")
+        self.client.warn_if_cli_outdated()
         if self.config.download_diagnostics:
             log("ℹ️ --download-diagnostics: job metadata is collected; bundle file download is not yet automated")
         log("")
@@ -185,6 +187,8 @@ class EnvironmentDiscoveryOrchestrator:
             results=self.results,
             services_discovered=summary["services_discovered"],
             discovery_tier=self.config.discovery_tier,
+            cli_info=self.api_recorder.cli_info,
+            missing_fields=self.api_recorder.missing_fields,
         )
         path = self.config.output_dir / "manifest.json"
         write_manifest(path, manifest)
@@ -257,6 +261,11 @@ Examples:
         choices=["environment", "freeipa", "datalake", "datahub", "cde", "cai", "cdw", "cdf", "cod", "iam", "audit", "replicationmanager", "lakehouseopt", "datacatalog", "dfworkload"] + tier4_choices,
         help="Services to exclude",
     )
+    parser.add_argument(
+        "--include-secrets",
+        action="store_true",
+        help="Also write raw credential payloads (e.g. CDE kubeconfig). Off by default; output then contains secrets",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     parser.add_argument("--no-archive", action="store_true", help="Skip tar.gz archive")
     return parser.parse_args(argv)
@@ -274,6 +283,7 @@ def _discovery_config_from_args(args, *, environment_name, output_dir=None, time
         full=args.full,
         exhaustive=args.exhaustive,
         download_diagnostics=args.download_diagnostics,
+        include_secrets=args.include_secrets,
         timestamp=timestamp,
         append_timestamp=append_timestamp,
     )
@@ -298,13 +308,14 @@ def _account_output_dir(args, timestamp):
     return Path(f"/tmp/discovery_account-{timestamp}")
 
 
-def _write_account_manifest(path, *, timestamp, output_dir, discovery_tier, profile, environments):
+def _write_account_manifest(path, *, timestamp, output_dir, discovery_tier, profile, environments, cli_info=None):
     manifest = {
-        "schemaVersion": "1",
+        "schemaVersion": "2",
         "scope": "account",
         "timestamp": timestamp,
         "discoveryTier": discovery_tier,
         "profile": profile,
+        **(cli_info or {}),
         "outputDir": str(output_dir),
         "environmentCount": len(environments),
         "environments": environments,
@@ -336,7 +347,8 @@ def discover_account(args):
     account_dir = _account_output_dir(args, timestamp)
     account_dir.mkdir(parents=True, exist_ok=True)
 
-    list_client = CDPClient(profile=args.profile, debug=args.debug)
+    list_recorder = APIManifestRecorder()
+    list_client = CDPClient(profile=args.profile, debug=args.debug, api_recorder=list_recorder)
     envs_json, envs_err = list_client.list_environments()
     if not envs_json:
         log(f"❌ Could not list CDP environments: {envs_err}")
@@ -421,6 +433,7 @@ def discover_account(args):
         discovery_tier=discovery_tier,
         profile=args.profile,
         environments=account_entries,
+        cli_info=list_recorder.cli_info,
     )
     log(f"📄 Wrote account manifest: {manifest_path}")
 

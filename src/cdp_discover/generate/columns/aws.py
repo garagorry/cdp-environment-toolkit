@@ -408,6 +408,13 @@ def _tag_value(key: str):
     return _f
 
 
+def _all_tags(rec):
+    """All workspace tags as ``key=value; ...`` (tag keys vary per customer)."""
+    tags = at("workspace.tags")(rec) or []
+    pairs = [f"{t.get('key')}={t.get('value')}" for t in tags if isinstance(t, dict) and t.get("key")]
+    return "; ".join(pairs) or None
+
+
 CMLCAI: List[Column] = [
     Column("Workspace",  "Workspace Name",       "workspace.instanceName"),
     Column("Workspace",  "Environment Name",     "workspace.environmentName"),
@@ -429,19 +436,16 @@ CMLCAI: List[Column] = [
     Column("Workspace",  "Is Private",           "workspace.isPrivate"),
 
     Column("Tags",       "Owner",                _tag_value("Owner")),
-    Column("Tags",       "Application Code",     _tag_value("customer:application-code")),
-    Column("Tags",       "Cost Center",          _tag_value("customer:cost-center")),
-    Column("Tags",       "Environment Tag",      _tag_value("customer:environment")),
-    Column("Tags",       "Project",              _tag_value("customer:project-name")),
-    Column("Tags",       "Responsible",          _tag_value("customer:responsible")),
+    Column("Tags",       "All Tags",             _all_tags),
 
     Column("Network",    "LB IP Whitelists",     _join("workspace.loadBalancerIPWhitelists")),
     Column("Network",    "Authorized IP Ranges", "workspace.authorizedIPRanges"),
 
     Column("Capacity",   "Instance Groups",      "workspace.instanceGroups"),
 
-    Column("Upgrade",    "Latest Available Version", "latestVersion.latestVersion"),
-    Column("Upgrade",    "Upgrade Options",          "latestVersion.upgradeOptions"),
+    Column("Upgrade",    "Latest Available Version", first(
+        "latestVersion.latestAvailableVersion", "latestVersion.version", "latestVersion.latestVersion"
+    )),
     Column("Backups",    "Backup Count",           lambda r: len(at("backups.backups")(r) or [])),
     Column("Access",     "Access Grant Count",     lambda r: len(at("access.access")(r) or [])),
 ]
@@ -495,7 +499,9 @@ CAI_REGISTRY: List[Column] = [
     Column("Registry",   "Version",              "registry.version"),
     Column("Registry",   "Domain",               "registry.domain"),
     Column("Registry",   "Created",              _date("registry.createdAt")),
-    Column("Upgrade",    "Latest Registry Version", "latestVersion.latestVersion"),
+    Column("Upgrade",    "Latest Registry Version", first(
+        "latestVersion.version", "latestVersion.latestVersion"
+    )),
 ]
 
 
@@ -659,17 +665,19 @@ CDE: List[Column] = [
     Column("Service",    "Log Location",         "service.logLocation"),
     Column("Service",    "Backup Location",      "service.backupLocation"),
     Column("Service",    "Public Endpoint",      "service.publicEndpointEnabled"),
+    Column("Service",    "Private Cluster",      "service.privateClusterEnabled"),
+    Column("Service",    "SSD Used",             "service.ssdUsed"),
 
+    # Requires CDP CLI >= 0.9.164; older CLIs drop service.version
+    Column("Upgrade",    "Current Version",      "service.version"),
+    Column("Upgrade",    "Previous Version Deployed", "service.previousVersionDeployed"),
     Column("Upgrade",    "Upgrade Message",      first(
         "upgrade.upgradeStatusMessage", "upgrade.upgradeStatus.upgradeStatusMessage"
     )),
+    Column("Upgrade",    "Upgrade Next Step",    "upgrade.nextStep"),
     Column("Upgrade",    "All Steps Completed",  first(
         "upgrade.allStepsCompleted", "upgrade.upgradeStatus.allStepsCompleted"
     )),
-    Column("Upgrade",    "Current Version",      first(
-        "upgrade.currentVersion", "upgrade.upgradeStatus.currentVersion"
-    )),
-    Column("Upgrade",    "Available Versions",   _join("upgrade.availableVersions")),
 ]
 
 
@@ -681,6 +689,7 @@ CDE_VC: List[Column] = [
     Column("Service",    "Cluster ID",           "service.clusterId"),
     Column("Service",    "Environment Name",     "service.environmentName"),
     Column("Service",    "Status",               "service.status"),
+    Column("Service",    "Service Version",      "service.version"),
 
     Column("Upgrade",    "Upgrade Message",      "upgrade.upgradeStatusMessage"),
 

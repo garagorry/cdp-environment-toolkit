@@ -4,7 +4,7 @@
 from pathlib import Path
 
 
-from cdp_discover.discover.utils import log, save_to_file
+from cdp_discover.discover.utils import check_expected_fields, log, save_to_file
 from cdp_discover.discover.exporters.csv_exporter import CSVExporter
 
 
@@ -26,7 +26,8 @@ class CAIDiscovery:
         self.client = cdp_client
         self.config = config
         self.exporter = CSVExporter()
-    
+        self._latest_version_json = None
+
     def discover(self):
         """
         Discover all ML workspaces in the environment.
@@ -117,8 +118,7 @@ class CAIDiscovery:
             return None
         
         workspace_obj = describe.get("workspace", describe)
-        workspace_crn = workspace_obj.get("crn")
-        
+
         # Save JSON
         json_path = cai_dir / f"{output_prefix}_{self.config.timestamp}.json"
         save_to_file(describe, json_path)
@@ -136,8 +136,9 @@ class CAIDiscovery:
         self._extract_quota_info(workspace_obj, cai_dir, output_prefix)
         
         # Get version and upgrade information
-        if workspace_crn:
-            self._get_workspace_version_info(workspace_crn, workspace_name, cai_dir, output_prefix)
+        missing = check_expected_fields(workspace_obj, ["version"], f"CAI workspace {workspace_name}")
+        self.client.note_missing_fields("cai", workspace_name, missing)
+        self._get_workspace_version_info(workspace_obj, workspace_name, cai_dir, output_prefix)
         
         # Get workspace backups
         self._get_workspace_backups(workspace_name, cai_dir, output_prefix)
@@ -244,26 +245,36 @@ class CAIDiscovery:
                 csv_path = cai_dir / f"{output_prefix}_{key}_{self.config.timestamp}.csv"
                 self.exporter.save_flattened_json_to_csv([workspace_obj[key]], csv_path)
     
-    def _get_workspace_version_info(self, workspace_crn, workspace_name, cai_dir, output_prefix):
-        """Get workspace version and upgrade information."""
-        log(f"📊 Getting version information for {workspace_name}...")
-        
-        version_json, version_err = self.client.get_latest_workspace_version(workspace_crn)
-        
-        if version_json:
-            version_path = cai_dir / f"{output_prefix}_LatestVersion_{self.config.timestamp}.json"
-            save_to_file(version_json, version_path)
-            
-            version_csv_path = cai_dir / f"{output_prefix}_LatestVersion_{self.config.timestamp}.csv"
-            self.exporter.save_flattened_json_to_csv(version_json, version_csv_path)
-            
-            # Log version info
-            latest_version = version_json.get("latestVersion")
-            if latest_version:
-                log(f"  Latest CAI version available: {latest_version}")
-        else:
-            if self.config.debug:
+    def _get_latest_available_version(self):
+        """Latest CAI workspace version (account-wide API; fetched once per run)."""
+        if self._latest_version_json is None:
+            version_json, version_err = self.client.get_latest_workspace_version()
+            self._latest_version_json = version_json or {}
+            if not version_json and self.config.debug:
                 log(f"DEBUG: Could not get latest version: {version_err}")
+        return self._latest_version_json
+
+    def _get_workspace_version_info(self, workspace_obj, workspace_name, cai_dir, output_prefix):
+        """Save current vs. latest available workspace version."""
+        log(f"📊 Getting version information for {workspace_name}...")
+
+        current_version = workspace_obj.get("version")
+        latest_version = self._get_latest_available_version().get("version")
+        if not current_version and not latest_version:
+            return
+
+        version_info = {
+            "workspaceName": workspace_name,
+            "currentVersion": current_version,
+            "latestAvailableVersion": latest_version,
+        }
+        version_path = cai_dir / f"{output_prefix}_LatestVersion_{self.config.timestamp}.json"
+        save_to_file(version_info, version_path)
+
+        version_csv_path = cai_dir / f"{output_prefix}_LatestVersion_{self.config.timestamp}.csv"
+        self.exporter.save_flattened_json_to_csv(version_info, version_csv_path)
+
+        log(f"  CAI workspace version: {current_version} (latest available: {latest_version})")
     
     def _get_workspace_backups(self, workspace_name, cai_dir, output_prefix):
         """Get workspace backups."""
@@ -437,7 +448,6 @@ class CAIDiscovery:
     def _describe_single_serving_app(self, app_summary, apps_dir):
         """Describe one ML Serving App."""
         app_crn = app_summary.get("crn") or app_summary.get("appCrn")
-        cluster_id = app_summary.get("clusterId")
         app_name = (
             app_summary.get("appName")
             or app_summary.get("name")
@@ -445,11 +455,11 @@ class CAIDiscovery:
             or "unknown"
         )
 
-        if not app_crn or not cluster_id:
-            log(f"⚠️ Skipping ML Serving App {app_name} (missing clusterId or crn)")
+        if not app_crn:
+            log(f"⚠️ Skipping ML Serving App {app_name} (missing crn)")
             return None
 
-        describe, err = self.client.describe_ml_serving_app(cluster_id, app_crn)
+        describe, err = self.client.describe_ml_serving_app(app_crn)
         if not describe:
             log(f"⚠️ Could not describe ML Serving App {app_name}")
             if self.config.debug:
@@ -491,14 +501,11 @@ class CAIDiscovery:
         )
         registry_crn = reg_summary.get("crn") or reg_summary.get("modelRegistryCrn")
 
-        if not registry_name:
-            log("⚠️ Skipping Model Registry with missing name")
+        if not registry_name or not registry_crn:
+            log("⚠️ Skipping Model Registry with missing name or crn")
             return None
 
-        describe, err = self.client.describe_model_registry(
-            self.config.environment_name,
-            registry_name,
-        )
+        describe, err = self.client.describe_model_registry(registry_crn)
         if not describe:
             log(f"⚠️ Could not describe Model Registry {registry_name}")
             if self.config.debug:
@@ -516,17 +523,16 @@ class CAIDiscovery:
                 subdir / f"model_registry_{registry_name}_{self.config.timestamp}.csv",
             )
 
-        if registry_crn:
-            version_json, version_err = self.client.get_latest_model_registry_version(registry_crn)
-            if version_json:
-                version_path = subdir / f"model_registry_{registry_name}_LatestVersion_{self.config.timestamp}.json"
-                save_to_file(version_json, version_path)
-                self.exporter.save_flattened_json_to_csv(
-                    subdir / f"model_registry_{registry_name}_LatestVersion_{self.config.timestamp}.csv",
-                    version_json,
-                )
-            elif self.config.debug:
-                log(f"DEBUG: Could not get latest registry version: {version_err}")
+        version_json, version_err = self.client.get_latest_model_registry_version()
+        if version_json:
+            version_path = subdir / f"model_registry_{registry_name}_LatestVersion_{self.config.timestamp}.json"
+            save_to_file(version_json, version_path)
+            self.exporter.save_flattened_json_to_csv(
+                version_json,
+                subdir / f"model_registry_{registry_name}_LatestVersion_{self.config.timestamp}.csv",
+            )
+        elif self.config.debug:
+            log(f"DEBUG: Could not get latest registry version: {version_err}")
         
         if registry_crn:
             access_json, access_err = self.client.list_model_registry_access(registry_crn)

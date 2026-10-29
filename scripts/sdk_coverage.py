@@ -106,6 +106,22 @@ def render_report(covered: dict[str, set[str]], include_sdk: bool) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def check_local_model(client_path: Path) -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from cdp_discover.discover.cli_model import get_cli_version, load_cli_model
+    from cdp_discover.discover.contract import check_client_contract
+
+    model = load_cli_model()
+    if not model:
+        print("Could not read the CDP CLI model (is `cdp` on PATH?)", file=sys.stderr)
+        return 1
+    issues = check_client_contract(model, client_path.read_text(encoding="utf-8"))
+    print(f"CDP CLI {get_cli_version()}: {len(issues)} contract issue(s)")
+    for issue in issues:
+        print(f"  {issue}")
+    return 1 if issues else 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -120,6 +136,12 @@ def main(argv=None) -> int:
         help="Fetch CDP SDK Java clients and list unwrapped read APIs",
     )
     parser.add_argument(
+        "--local-model",
+        action="store_true",
+        help="Validate client.py calls (operations, flags, required args) against the "
+             "installed CDP CLI's bundled API model; exits 1 on violations",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write markdown report to this file (default: stdout)",
@@ -129,6 +151,9 @@ def main(argv=None) -> int:
     if not args.client.is_file():
         print(f"client.py not found: {args.client}", file=sys.stderr)
         return 1
+
+    if args.local_model:
+        return check_local_model(args.client)
 
     covered = parse_client_operations(args.client)
     report = render_report(covered, include_sdk=args.compare_sdk)

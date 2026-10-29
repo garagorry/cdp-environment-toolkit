@@ -32,21 +32,32 @@ shift
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if ! command -v cdp &> /dev/null; then
+if ! command -v cdp &>/dev/null; then
     echo -e "${YELLOW}⚠️  CDP CLI not found in PATH${NC}"
     echo "Activate your CDP CLI environment, then retry."
-    read -p "Press Enter to continue anyway, or Ctrl+C to abort..."
+    read -r -p "Press Enter to continue anyway, or Ctrl+C to abort..."
 fi
 
+# Keep in sync with MIN_CDP_CLI_VERSION in src/cdp_discover/discover/cli_model.py
+MIN_CDP_CLI_VERSION="0.9.164"
+
 echo -e "${BLUE}🔍 Verifying CDP CLI...${NC}"
-if cdp --version &> /dev/null; then
-    echo -e "${GREEN}✅ CDP CLI: $(cdp --version 2>&1 | head -1)${NC}"
+if cdp --version &>/dev/null; then
+    CDP_CLI_VERSION="$(cdp --version 2>&1 | head -1)"
+    echo -e "${GREEN}✅ CDP CLI: ${CDP_CLI_VERSION}${NC}"
+    # sort -V puts the lower version first; if that is not the minimum, the CLI is older
+    OLDEST="$(printf '%s\n%s\n' "$MIN_CDP_CLI_VERSION" "${CDP_CLI_VERSION//[!0-9.]/}" | sort -V | head -1)"
+    if [ "$OLDEST" != "$MIN_CDP_CLI_VERSION" ]; then
+        echo -e "${YELLOW}⚠️  CDP CLI ${CDP_CLI_VERSION} is older than ${MIN_CDP_CLI_VERSION}.${NC}"
+        echo "   Older CLIs silently drop newer API fields (e.g. CDE service version)."
+        echo "   Upgrade with: pip install -U cdpcli"
+    fi
 else
     echo -e "${RED}❌ CDP CLI verification failed${NC}"
     exit 1
 fi
 
-if ! command -v cdp-discover &> /dev/null; then
+if ! command -v cdp-discover &>/dev/null; then
     echo -e "${YELLOW}⚠️  cdp-discover not in PATH; using python -m cdp_discover${NC}"
     RUN=(python3 -m cdp_discover discover)
 else
@@ -58,8 +69,9 @@ echo ""
 echo -e "${BLUE}🚀 Discovering environment: ${GREEN}${ENVIRONMENT_NAME}${NC}"
 echo ""
 
-"${RUN[@]}" --environment-name "$ENVIRONMENT_NAME" "$@"
-EXIT_CODE=$?
+# Capture the exit code without tripping set -e
+EXIT_CODE=0
+"${RUN[@]}" --environment-name "$ENVIRONMENT_NAME" "$@" || EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
     echo ""

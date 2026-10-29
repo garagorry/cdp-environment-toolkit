@@ -31,16 +31,8 @@ class AuditDiscovery:
         elif self.config.debug:
             log(f"DEBUG: audit archiving config: {config_err}")
 
-        status_json, status_err = self.client.get_audit_archiving_status()
-        if status_json:
-            any_data = True
-            save_to_file(status_json, audit_dir / f"audit_archiving_status_{ts}.json")
-            self.exporter.save_flattened_json_to_csv(
-                status_json, audit_dir / f"audit_archiving_status_{ts}.csv"
-            )
-            results["archiving_status"] = status_json
-        elif self.config.debug:
-            log(f"DEBUG: audit archiving status: {status_err}")
+        # get-archiving-status requires a --task-id that only the (mutating)
+        # archive-audit-events call returns, so it is not part of read-only discovery.
 
         runs_json, runs_err = self.client.list_audit_recent_archive_runs()
         if runs_json:

@@ -9,7 +9,13 @@ database workloads (HBase/Phoenix).
 from pathlib import Path
 
 
-from cdp_discover.discover.utils import log, save_to_file, run_command_json, save_recipe_script
+from cdp_discover.discover.utils import (
+    check_expected_fields,
+    log,
+    run_command_json,
+    save_recipe_script,
+    save_to_file,
+)
 from cdp_discover.discover.exporters.csv_exporter import CSVExporter
 from cdp_discover.discover.diagnostics import save_diagnostic_collect
 
@@ -130,7 +136,9 @@ class CODDiscovery:
             return None
         
         database_obj = describe.get("databaseDetails", describe)
-        
+        missing = check_expected_fields(database_obj, ["dbVersion"], f"COD database {database_name}")
+        self.client.note_missing_fields("cod", database_name, missing)
+
         # Save JSON
         json_path = cod_dir / f"{output_prefix}_{self.config.timestamp}.json"
         save_to_file(describe, json_path)

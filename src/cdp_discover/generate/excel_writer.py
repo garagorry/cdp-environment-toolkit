@@ -168,22 +168,30 @@ def write_sheet(
     return ws
 
 
-def _summary_sheet(wb: Workbook, sheets_info: List[Tuple[str, int, int]]) -> Worksheet:
-    """First-tab summary: rows per sheet + columns per sheet."""
+def _summary_sheet(
+    wb: Workbook,
+    sheets_info: List[Tuple[str, int, int]],
+    metadata: Sequence[Tuple[str, object]] = (),
+) -> Worksheet:
+    """First-tab summary: run metadata, then rows per sheet + columns per sheet."""
     ws = wb.create_sheet("SUMMARY", 0)
     ws.cell(row=1, column=1, value="UPGRADE PLANNING REPORT").font = Font(size=14, bold=True, color="1F4E79")
     ws.merge_cells(start_row=1, end_row=1, start_column=1, end_column=4)
     ws.cell(row=2, column=1, value="Generated").font = Font(bold=True)
     ws.cell(row=2, column=2, value=_dt.datetime.now()).number_format = "yyyy-mm-dd hh:mm:ss"
+    for r, (label, value) in enumerate(metadata, start=3):
+        ws.cell(row=r, column=1, value=label).font = Font(bold=True)
+        ws.cell(row=r, column=2, value=value)
 
+    header_row = 4 + len(metadata)
     headers = ["Sheet", "Rows", "Columns", "Notes"]
     for i, h in enumerate(headers, start=1):
-        cell = ws.cell(row=4, column=i, value=h)
+        cell = ws.cell(row=header_row, column=i, value=h)
         cell.font = _LABEL_FONT
         cell.fill = _LABEL_FILL
         cell.alignment = _CENTER_BOLD
         cell.border = _BORDER
-    for r, (name, n_rows, n_cols) in enumerate(sheets_info, start=5):
+    for r, (name, n_rows, n_cols) in enumerate(sheets_info, start=header_row + 1):
         ws.cell(row=r, column=1, value=name).border = _BORDER
         ws.cell(row=r, column=2, value=n_rows).border = _BORDER
         ws.cell(row=r, column=3, value=n_cols).border = _BORDER
@@ -193,13 +201,14 @@ def _summary_sheet(wb: Workbook, sheets_info: List[Tuple[str, int, int]]) -> Wor
     ws.column_dimensions["B"].width = 10
     ws.column_dimensions["C"].width = 12
     ws.column_dimensions["D"].width = 38
-    ws.freeze_panes = "A5"
+    ws.freeze_panes = f"A{header_row + 1}"
     return ws
 
 
 def write_workbook(
     output_path: str,
     sheets: Iterable[Tuple[str, Sequence[Column], Sequence[dict]]],
+    metadata: Sequence[Tuple[str, object]] = (),
 ) -> str:
     wb = Workbook()
     wb.remove(wb.active)
@@ -207,7 +216,7 @@ def write_workbook(
     for name, columns, records in sheets:
         write_sheet(wb, name, columns, records)
         info.append((name, len(records), len(columns)))
-    _summary_sheet(wb, info)
+    _summary_sheet(wb, info, metadata)
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
     wb.save(output_path)
     return output_path

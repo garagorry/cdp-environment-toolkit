@@ -99,6 +99,26 @@ def _default_output(discovery_dir: str, env_name: str) -> str:
     return os.path.join(discovery_dir, f"UpgradePlanning_{base}.xlsx")
 
 
+def _run_metadata(manifest: dict | None) -> List[tuple]:
+    """SUMMARY-sheet rows describing how the discovery snapshot was taken."""
+    manifest = manifest or {}
+    outdated = manifest.get("cliOutdated")
+    if outdated is True:
+        cli_note = f"OUTDATED (minimum {manifest.get('minCdpCliVersion')}); newer fields may be missing"
+    elif outdated is False:
+        cli_note = "OK"
+    else:
+        cli_note = "unknown (discovery predates CLI version tracking)"
+    missing = manifest.get("missingExpectedFields") or []
+    return [
+        ("Discovery timestamp", manifest.get("timestamp") or ""),
+        ("CDP CLI version", f"{manifest.get('cdpCliVersion') or 'unknown'} - {cli_note}"),
+        ("Missing expected fields", "; ".join(
+            f"{m.get('service')}/{m.get('resource')}: {', '.join(m.get('fields') or [])}" for m in missing
+        ) or "none recorded"),
+    ]
+
+
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cdp-discover generate",
@@ -170,7 +190,7 @@ def main(argv: List[str] | None = None) -> int:
         sheets_for_writer.append((name, columns, rows))
 
     print(f"\nWriting workbook -> {output}")
-    write_workbook(output, sheets_for_writer)
+    write_workbook(output, sheets_for_writer, metadata=_run_metadata(manifest))
     print("Done.")
     return 0
 

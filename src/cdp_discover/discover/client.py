@@ -3,6 +3,14 @@
 
 import os
 from pathlib import Path
+from cdp_discover.discover.cli_model import (
+    MIN_CDP_CLI_VERSION,
+    get_cli_version,
+    get_form_factor,
+    is_outdated,
+    kebab_to_camel,
+    load_cli_model,
+)
 from cdp_discover.discover.utils import log, run_command_json
 
 
@@ -22,6 +30,52 @@ class CDPClient:
         self.debug = debug
         self.api_recorder = api_recorder
         self._validate_credentials()
+        self.cli_version = get_cli_version()
+        self.cli_outdated = is_outdated(self.cli_version)
+        self.form_factor = get_form_factor(profile)
+        # None when the CLI model cannot be inspected; supports() then allows every call
+        self._cli_model = load_cli_model()
+        if self.api_recorder is not None:
+            self.api_recorder.set_cli_info(
+                version=self.cli_version,
+                minimum=MIN_CDP_CLI_VERSION,
+                outdated=self.cli_outdated,
+                form_factor=self.form_factor,
+            )
+    
+    def warn_if_cli_outdated(self):
+        """Log a warning when the installed CDP CLI may drop newer API fields."""
+        if self.cli_outdated:
+            log(
+                f"⚠️ CDP CLI {self.cli_version} is older than {MIN_CDP_CLI_VERSION}. "
+                "The CLI drops response fields its bundled model does not know "
+                "(e.g. CDE service version), so this snapshot will be incomplete. "
+                "Upgrade with: pip install -U cdpcli"
+            )
+        elif self.cli_outdated is None:
+            log(f"⚠️ Could not determine CDP CLI version (minimum recommended: {MIN_CDP_CLI_VERSION})")
+    
+    def supports(self, service, operation):
+        """
+        Return (supported, reason). An operation is unsupported when the installed
+        CLI does not ship it, or it is not available on this profile's form factor.
+        """
+        if self._cli_model is None:
+            return True, None
+        ops = self._cli_model.get(service)
+        if ops is None:
+            return False, "unsupported-by-cli"
+        op = ops.get(kebab_to_camel(operation))
+        if op is None:
+            return False, "unsupported-by-cli"
+        if self.form_factor not in op.get("formFactors", [self.form_factor]):
+            return False, f"not-available-on-{self.form_factor}"
+        return True, None
+    
+    def note_missing_fields(self, service, resource, fields):
+        """Record expected snapshot fields absent from a response."""
+        if fields and self.api_recorder is not None:
+            self.api_recorder.record_missing_fields(service, resource, fields)
     
     def _validate_credentials(self):
         """Validate that CDP credentials are configured."""
@@ -106,7 +160,18 @@ class CDPClient:
             tuple: (result_json, error)
         """
         command = self._build_command(service, operation, **kwargs)
+        supported, reason = self.supports(service, operation)
+        if not supported:
+            if self.debug:
+                log(f"DEBUG: Skipping cdp {service} {operation}: {reason}")
+            if self.api_recorder is not None:
+                self.api_recorder.record(service, operation, command, success=False, skipped=reason)
+            return None, f"skipped: {reason}"
         result, error = run_command_json(command, task_name=task_name, debug=self.debug)
+        if error and error.lstrip().startswith("usage:"):
+            # argparse dumps the whole usage text; keep the actual complaint
+            lines = [ln.strip() for ln in error.splitlines() if ln.strip()]
+            error = lines[-1] if lines else error
         if self.api_recorder is not None:
             self.api_recorder.record(
                 service,
@@ -218,15 +283,6 @@ class CDPClient:
             cluster_name=cluster_crn
         )
     
-    def describe_datahub_database_server(self, cluster_crn):
-        """Describe database server for a DataHub cluster."""
-        return self.execute(
-            "datahub",
-            "describe-database-server",
-            task_name=f"Describing DataHub database server",
-            cluster_crn=cluster_crn
-        )
-    
     def get_datahub_cluster_service_status(self, cluster_name):
         """Get service health status for a DataHub cluster."""
         return self.execute(
@@ -275,16 +331,13 @@ class CDPClient:
         )
     
     # CDE operations
-    def list_cde_services(self, environment_name=None):
-        """List CDE services."""
-        kwargs = {}
-        if environment_name:
-            kwargs['environment_name'] = environment_name
+    def list_cde_services(self):
+        """List CDE services (account-wide; deleted services filtered out)."""
         return self.execute(
             "de",
             "list-services",
             task_name="Listing CDE services",
-            **kwargs
+            remove_deleted=True,
         )
     
     def describe_cde_service(self, cluster_id):
@@ -316,7 +369,7 @@ class CDPClient:
         )
     
     def get_cde_upgrade_status(self, cluster_id):
-        """Get CDE service upgrade status and version information."""
+        """Get CDE multi-step upgrade status (message, next step, completion)."""
         return self.execute(
             "de",
             "get-upgrade-status",
@@ -339,16 +392,15 @@ class CDPClient:
             "de",
             "get-service-init-logs",
             task_name=f"Getting init logs for {cluster_id}",
-            cluster_id=cluster_id
+            service_id=cluster_id,
         )
     
-    def list_cde_backups(self, cluster_id):
-        """List CDE service backups."""
+    def list_cde_backups(self):
+        """List CDE service backups (account-wide; filter by clusterId client-side)."""
         return self.execute(
             "de",
             "list-backups",
-            task_name=f"Listing backups for {cluster_id}",
-            cluster_id=cluster_id
+            task_name="Listing CDE backups",
         )
     
     def describe_cde_backup(self, backup_id):
@@ -393,13 +445,12 @@ class CDPClient:
             workspace_name=workspace_name
         )
     
-    def get_latest_workspace_version(self, workspace_crn):
-        """Get latest workspace version for upgrade information."""
+    def get_latest_workspace_version(self):
+        """Get the latest CAI workspace version available (account-wide, no arguments)."""
         return self.execute(
             "ml",
             "get-latest-workspace-version",
-            task_name=f"Getting latest workspace version",
-            workspace_crn=workspace_crn
+            task_name="Getting latest workspace version",
         )
     
     def list_workspace_backups(self, workspace_name, environment_name):
@@ -430,13 +481,12 @@ class CDPClient:
             task_name="Listing ML Serving Apps"
         )
     
-    def describe_ml_serving_app(self, cluster_id, app_crn):
+    def describe_ml_serving_app(self, app_crn):
         """Describe an ML Serving App."""
         return self.execute(
             "ml",
             "describe-ml-serving-app",
             task_name="Describing ML Serving App",
-            cluster_id=cluster_id,
             app_crn=app_crn,
         )
     
@@ -448,23 +498,21 @@ class CDPClient:
             task_name="Listing Model Registries"
         )
     
-    def describe_model_registry(self, environment_name, registry_name):
+    def describe_model_registry(self, model_registry_crn):
         """Describe a Model Registry."""
         return self.execute(
             "ml",
             "describe-model-registry",
-            task_name=f"Describing Model Registry {registry_name}",
-            environment_name=environment_name,
-            registry_name=registry_name
+            task_name="Describing Model Registry",
+            model_registry_crn=model_registry_crn,
         )
-    
-    def get_latest_model_registry_version(self, model_registry_crn):
-        """Get latest model registry version."""
+
+    def get_latest_model_registry_version(self):
+        """Get the latest Model Registry version available (account-wide, no arguments)."""
         return self.execute(
             "ml",
             "get-latest-model-registry-version",
-            task_name=f"Getting latest model registry version",
-            model_registry_crn=model_registry_crn
+            task_name="Getting latest model registry version",
         )
     
     def list_ml_serving_app_access(self, resource_crn):
@@ -582,15 +630,6 @@ class CDPClient:
             task_name=f"Describing Data Visualization {data_visualization_id}",
             cluster_id=cluster_id,
             data_visualization_id=data_visualization_id
-        )
-    
-    def list_cdw_hues(self, cluster_id):
-        """List Hue instances in a CDW cluster."""
-        return self.execute(
-            "dw",
-            "list-hues",
-            task_name=f"Listing Hue instances for cluster {cluster_id}",
-            cluster_id=cluster_id
         )
     
     def list_cdw_backup_entities(self):
@@ -892,16 +931,13 @@ class CDPClient:
             task_name="Getting audit archiving config",
         )
     
-    def get_audit_archiving_status(self, task_id=None):
-        """Get audit archiving status."""
-        kwargs = {}
-        if task_id:
-            kwargs["task_id"] = task_id
+    def get_audit_archiving_status(self, task_id):
+        """Get status of an audit archiving task (task id comes from archive-audit-events)."""
         return self.execute(
             "audit",
             "get-archiving-status",
             task_name="Getting audit archiving status",
-            **kwargs,
+            task_id=task_id,
         )
     
     def list_audit_recent_archive_runs(self, limit=50):
@@ -1327,7 +1363,7 @@ class CDPClient:
             "dw",
             "list-events",
             task_name="Listing CDW cluster events",
-            cluster_id=cluster_id,
+            service_id=cluster_id,
             limit=limit,
         )
     

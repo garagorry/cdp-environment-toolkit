@@ -8,6 +8,7 @@ dependencies = []
 
 [project.optional-dependencies]
 report = ["openpyxl>=3.1.0"]
+dev = ["pytest>=7"]
 
 [project.scripts]
 cdp-discover = "cdp_discover.cli:main"
@@ -23,3 +24,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-MANIFEST_SCHEMA_VERSION = "1"
+MANIFEST_SCHEMA_VERSION = "2"
 
 
 def _cloud_platform(environment_result: Optional[dict]) -> Optional[str]:
@@ -26,6 +26,8 @@ def build_manifest(
     results: Dict[str, Any],
     services_discovered: Dict[str, Dict[str, Any]],
     discovery_tier: str = "standard",
+    cli_info: Optional[Dict[str, Any]] = None,
+    missing_fields: Optional[List[Dict[str, Any]]] = None,
 ) -> dict:
     """Build manifest dict from orchestrator results."""
     services = [
@@ -42,10 +44,12 @@ def build_manifest(
         "environmentName": environment_name,
         "timestamp": timestamp,
         "discoveryTier": discovery_tier,
+        **(cli_info or {}),
         "outputDir": str(output_dir),
         "cloudPlatform": cloud,
         "services": sorted(set(services)),
         "servicesDiscovered": services_discovered,
+        "missingExpectedFields": missing_fields or [],
     }
 
 

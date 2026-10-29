@@ -4,7 +4,7 @@
 from pathlib import Path
 
 
-from cdp_discover.discover.utils import log, save_to_file
+from cdp_discover.discover.utils import check_expected_fields, log, save_to_file
 from cdp_discover.discover.exporters.csv_exporter import CSVExporter
 from cdp_discover.discover.diagnostics import save_diagnostic_collect, save_diagnostic_job_describes
 
@@ -116,7 +116,9 @@ class CDWDiscovery:
             return None
         
         cluster_obj = describe.get("cluster", describe)
-        
+        missing = check_expected_fields(cluster_obj, ["version"], f"CDW cluster {cluster_name}")
+        self.client.note_missing_fields("cdw", cluster_name, missing)
+
         # Save JSON
         json_path = cdw_dir / f"{output_prefix}_{self.config.timestamp}.json"
         save_to_file(describe, json_path)
@@ -133,10 +135,9 @@ class CDWDiscovery:
         
         # 4. Discover Data Visualizations
         data_vizs = self._discover_data_visualizations(cluster_id, cluster_name, cdw_dir)
-        
-        # 5. Discover Hue instances
-        hues = self._discover_hue_instances(cluster_id, cluster_name, cdw_dir)
-        
+
+        # Hue endpoints are reported per VW (vw.endpoints.hue); the dw API has no list-hues
+
         if self.config.deep:
             self._discover_deep_extras(cluster_id, cluster_name, cdw_dir)
         if self.config.full:
@@ -151,7 +152,6 @@ class CDWDiscovery:
             'dbcs': dbcs,
             'virtual_warehouses': vws,
             'data_visualizations': data_vizs,
-            'hues': hues
         }
     
     def _discover_database_catalogs(self, cluster_id, cluster_name, cdw_dir):
@@ -323,7 +323,9 @@ class CDWDiscovery:
             return None
         
         vw_obj = vw_describe.get("vw", vw_describe)
-        
+        missing = check_expected_fields(vw_obj, ["cdhVersion"], f"CDW VW {vw_name}")
+        self.client.note_missing_fields("cdw", vw_name, missing)
+
         # Create subdirectory for this VW
         vw_subdir = vws_dir / vw_name
         vw_subdir.mkdir(parents=True, exist_ok=True)
@@ -412,35 +414,6 @@ class CDWDiscovery:
             described.append({"id": dviz_id, "name": dviz_name, "details": dviz_obj})
 
         return described
-    
-    def _discover_hue_instances(self, cluster_id, cluster_name, cdw_dir):
-        """Discover Hue instances for a CDW cluster."""
-        log(f"🎨 Discovering Hue instances for {cluster_name}...")
-        
-        hues_json, hues_err = self.client.list_cdw_hues(cluster_id)
-        
-        if not hues_json:
-            if self.config.debug:
-                log(f"DEBUG: Could not list Hue instances: {hues_err}")
-            return []
-        
-        hues = hues_json.get("hues", [])
-        
-        if not hues:
-            log(f"ℹ️ No Hue instances found in {cluster_name}")
-            return []
-        
-        log(f"Found {len(hues)} Hue instance(s)")
-        
-        # Save Hue instances
-        hue_path = cdw_dir / f"hue_instances_{self.config.timestamp}.json"
-        save_to_file(hues_json, hue_path)
-        
-        if hues:
-            hue_csv_path = cdw_dir / f"hue_instances_{self.config.timestamp}.csv"
-            self.exporter.save_instance_groups_to_csv(hue_csv_path, hues)
-        
-        return hues
     
     def _discover_cdw_backups(self):
         """Discover CDW backup entities, backups, and restore jobs (account-level)."""

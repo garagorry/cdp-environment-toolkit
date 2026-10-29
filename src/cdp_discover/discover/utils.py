@@ -169,6 +169,25 @@ def flatten_json(data, parent_key='', sep='.'):
     return dict(items)
 
 
+def check_expected_fields(obj, fields, context):
+    """
+    Return dotted ``fields`` that are absent (or null) in ``obj`` and warn about them.
+
+    An outdated CDP CLI silently drops fields its bundled model does not know,
+    so a missing version field usually means the CLI needs upgrading.
+    """
+    missing = []
+    for field in fields:
+        value = obj
+        for part in field.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        if value in (None, ""):
+            missing.append(field)
+    if missing:
+        log(f"⚠️ {context}: expected field(s) missing from response: {', '.join(missing)}")
+    return missing
+
+
 _SENSITIVE_KEY_FRAGMENTS = (
     "kubeconfig", "privatekey", "private_key", "secret", "password", "token",
     "certificate", "cert", "accesskey", "access_key", "credential",

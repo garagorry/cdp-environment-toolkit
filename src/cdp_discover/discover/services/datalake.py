@@ -4,7 +4,13 @@
 from pathlib import Path
 
 
-from cdp_discover.discover.utils import log, save_to_file, save_recipe_script, run_command_json
+from cdp_discover.discover.utils import (
+    check_expected_fields,
+    log,
+    run_command_json,
+    save_recipe_script,
+    save_to_file,
+)
 from cdp_discover.discover.exporters.csv_exporter import CSVExporter
 from cdp_discover.discover.diagnostics import save_diagnostic_collect
 
@@ -127,7 +133,9 @@ class DatalakeDiscovery:
             return None
         
         dl_obj = describe_dl_json.get("datalake", describe_dl_json.get("datalakeDetails", describe_dl_json))
-        
+        missing = check_expected_fields(dl_obj, ["clouderaManager.version"], f"Data Lake {datalake_name}")
+        self.client.note_missing_fields("datalake", datalake_name, missing)
+
         # Save JSON
         json_path = dl_dir / f"{output_prefix}_{self.config.timestamp}.json"
         save_to_file(describe_dl_json, json_path)

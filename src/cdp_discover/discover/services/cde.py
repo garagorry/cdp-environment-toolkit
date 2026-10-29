@@ -4,7 +4,12 @@
 from pathlib import Path
 
 
-from cdp_discover.discover.utils import log, save_to_file, kubeconfig_metadata
+from cdp_discover.discover.utils import (
+    check_expected_fields,
+    kubeconfig_metadata,
+    log,
+    save_to_file,
+)
 from cdp_discover.discover.exporters.csv_exporter import CSVExporter
 
 
@@ -14,7 +19,13 @@ class CDEDiscovery:
     
     # Cloud provider availability
     SUPPORTED_CLOUDS = ['aws', 'azure', 'gcp']
-    
+
+    # Snapshot fields an up-to-date CLI returns from describe-service
+    EXPECTED_SERVICE_FIELDS = ['version']
+
+    # get-upgrade-status answers HTTP 500 with this message when a service was never upgraded
+    NO_UPGRADE_INFO = "no upgrade info available"
+
     def __init__(self, cdp_client, config):
         """
         Initialize CDE discovery.
@@ -26,7 +37,8 @@ class CDEDiscovery:
         self.client = cdp_client
         self.config = config
         self.exporter = CSVExporter()
-    
+        self._all_backups = None
+
     def discover(self):
         """
         Discover all CDE services in the environment.
@@ -62,6 +74,16 @@ class CDEDiscovery:
             log(f"ℹ️ No CDE services found in environment {self.config.environment_name}")
             return results
         
+        # Keep the list response as a second source for service summaries
+        cde_root = self.config.get_service_dir("cde")
+        save_to_file(
+            {"services": services},
+            cde_root / f"services_list_{self.config.timestamp}.json",
+        )
+        self.exporter.save_instance_groups_to_csv(
+            cde_root / f"services_list_{self.config.timestamp}.csv", services
+        )
+
         log(f"Found {len(services)} CDE service(s):")
         for s in services:
             log(f"  - {s.get('name')} (Cluster ID: {s.get('clusterId')})")
@@ -107,7 +129,14 @@ class CDEDiscovery:
             return None
         
         service_obj = describe.get("service", describe)
-        
+        version = service_obj.get("version")
+        if version:
+            log(f"  CDE service version: {version}")
+        missing = check_expected_fields(
+            service_obj, self.EXPECTED_SERVICE_FIELDS, f"CDE service {service_name}"
+        )
+        self.client.note_missing_fields("cde", service_name, missing)
+
         # Save JSON
         json_path = cde_dir / f"{output_prefix}_{self.config.timestamp}.json"
         save_to_file(describe, json_path)
@@ -131,6 +160,7 @@ class CDEDiscovery:
         return {
             'name': service_name,
             'cluster_id': cluster_id,
+            'version': version,
             'details': service_obj,
             'virtual_clusters': virtual_clusters,
             'upgrade_status': upgrade_status
@@ -267,52 +297,48 @@ class CDEDiscovery:
     
     def _get_service_version_info(self, cluster_id, service_name, cde_dir, output_prefix):
         """
-        Get CDE service upgrade status and version information.
-        This is CRITICAL for identifying pending upgrades.
-        
+        Get CDE multi-step upgrade status. The service version itself comes from
+        describe-service (``service.version``); this API only reports upgrade progress.
+
         Args:
             cluster_id: CDE service cluster ID
             service_name: CDE service name
             cde_dir: Output directory for CDE service
             output_prefix: Output file prefix
-            
+
         Returns:
-            dict: Upgrade status information
+            dict: Upgrade status information, or None if unavailable
         """
-        log(f"📊 Getting upgrade status and version info for {service_name}...")
-        
-        # Get upgrade status
+        log(f"📊 Getting upgrade status for {service_name}...")
+
         upgrade_json, upgrade_err = self.client.get_cde_upgrade_status(cluster_id)
-        
-        if upgrade_json:
-            upgrade_path = cde_dir / f"{output_prefix}_UpgradeStatus_{self.config.timestamp}.json"
-            save_to_file(upgrade_json, upgrade_path)
-            
-            upgrade_csv_path = cde_dir / f"{output_prefix}_UpgradeStatus_{self.config.timestamp}.csv"
-            self.exporter.save_flattened_json_to_csv(upgrade_json, upgrade_csv_path)
-            
-            # Extract version information for summary
-            upgrade_obj = upgrade_json.get("upgradeStatus", upgrade_json)
-            current_version = upgrade_obj.get("currentVersion")
-            available_versions = upgrade_obj.get("availableVersions", [])
-            
-            if current_version:
-                log(f"  Current CDE version: {current_version}")
-            if available_versions:
-                log(f"  Available upgrades: {len(available_versions)} version(s)")
-            
-            return {
-                'current_version': current_version,
-                'available_versions': available_versions,
-                'upgrade_available': len(available_versions) > 0 if available_versions else False,
-                'status': upgrade_obj.get("status"),
-                'details': upgrade_obj
+
+        if not upgrade_json and upgrade_err and self.NO_UPGRADE_INFO in upgrade_err.lower():
+            # Normal for services that have never been upgraded
+            upgrade_json = {
+                "upgradeStatusMessage": "No upgrade has been run on this service",
+                "neverUpgraded": True,
             }
-        else:
+            log(f"  No upgrade history for {service_name}")
+
+        if not upgrade_json:
             log(f"⚠️ Could not get upgrade status for {service_name}")
             if self.config.debug:
                 log(f"DEBUG: upgrade_err: {upgrade_err}")
             return None
+
+        upgrade_path = cde_dir / f"{output_prefix}_UpgradeStatus_{self.config.timestamp}.json"
+        save_to_file(upgrade_json, upgrade_path)
+
+        upgrade_csv_path = cde_dir / f"{output_prefix}_UpgradeStatus_{self.config.timestamp}.csv"
+        self.exporter.save_flattened_json_to_csv(upgrade_json, upgrade_csv_path)
+
+        return {
+            'message': upgrade_json.get("upgradeStatusMessage"),
+            'next_step': upgrade_json.get("nextStep"),
+            'all_steps_completed': upgrade_json.get("allStepsCompleted"),
+            'never_upgraded': upgrade_json.get("neverUpgraded", False),
+        }
     
     def _get_service_additional_details(self, cluster_id, service_name, cde_dir, output_prefix):
         """
@@ -324,31 +350,32 @@ class CDEDiscovery:
             cde_dir: Output directory for CDE service
             output_prefix: Output file prefix
         """
-        # 1. Get Kubeconfig
+        # 1. Get Kubeconfig (redacted metadata only unless --include-secrets)
         try:
             kubeconfig_json, kubeconfig_err = self.client.get_cde_kubeconfig(cluster_id)
             if kubeconfig_json:
-                kubeconfig_path = cde_dir / f"{output_prefix}_Kubeconfig_{self.config.timestamp}.json"
-                save_to_file(kubeconfig_json, kubeconfig_path)
+                if self.config.include_secrets:
+                    kubeconfig_path = cde_dir / f"{output_prefix}_Kubeconfig_{self.config.timestamp}.json"
+                    save_to_file(kubeconfig_json, kubeconfig_path)
                 meta_path = cde_dir / f"{output_prefix}_KubeconfigMeta_{self.config.timestamp}.json"
                 save_to_file(kubeconfig_metadata(kubeconfig_json), meta_path)
         except Exception as e:
             if self.config.debug:
                 log(f"DEBUG: Could not get Kubeconfig: {e}")
         
-        # 2. List backups
+        # 2. List backups (account-wide API, filtered to this service)
         try:
-            backups_json, backups_err = self.client.list_cde_backups(cluster_id)
-            if backups_json:
-                backups = backups_json.get("backups", [])
-                if backups:
-                    log(f"Found {len(backups)} backup(s) for {service_name}")
-                    backups_path = cde_dir / f"{output_prefix}_Backups_{self.config.timestamp}.json"
-                    save_to_file(backups_json, backups_path)
-                    backups_csv_path = cde_dir / f"{output_prefix}_Backups_{self.config.timestamp}.csv"
-                    if backups:
-                        self.exporter.save_instance_groups_to_csv(backups_csv_path, backups)
-                    self._discover_cde_backup_details(backups, cde_dir, output_prefix)
+            backups = [
+                b for b in self._list_all_backups()
+                if b.get("clusterId") == cluster_id
+            ]
+            if backups:
+                log(f"Found {len(backups)} backup(s) for {service_name}")
+                backups_path = cde_dir / f"{output_prefix}_Backups_{self.config.timestamp}.json"
+                save_to_file({"backups": backups}, backups_path)
+                backups_csv_path = cde_dir / f"{output_prefix}_Backups_{self.config.timestamp}.csv"
+                self.exporter.save_instance_groups_to_csv(backups_csv_path, backups)
+                self._discover_cde_backup_details(backups, cde_dir, output_prefix)
         except Exception as e:
             if self.config.debug:
                 log(f"DEBUG: Could not list backups: {e}")
@@ -378,6 +405,15 @@ class CDEDiscovery:
         elif self.config.debug:
             log(f"DEBUG: CDE suspend/resume for {service_name}: {err}")
     
+    def _list_all_backups(self):
+        """List CDE backups once per run; list-backups has no per-service argument."""
+        if self._all_backups is None:
+            backups_json, backups_err = self.client.list_cde_backups()
+            self._all_backups = (backups_json or {}).get("backups") or []
+            if backups_json is None and self.config.debug:
+                log(f"DEBUG: Could not list CDE backups: {backups_err}")
+        return self._all_backups
+
     def _discover_cde_backup_details(self, backups, cde_dir, output_prefix):
         """Describe each CDE backup and fetch backup logs."""
         backups_dir = cde_dir / "backups"
