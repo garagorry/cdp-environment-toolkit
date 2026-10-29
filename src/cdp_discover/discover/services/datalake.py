@@ -7,7 +7,6 @@ from pathlib import Path
 from cdp_discover.discover.utils import (
     check_expected_fields,
     log,
-    run_command_json,
     save_recipe_script,
     save_to_file,
 )
@@ -315,11 +314,11 @@ class DatalakeDiscovery:
         
         for recipe_name in sorted(recipes_set):
             # Note: All recipes use 'cdp datahub describe-recipe' regardless of service type
-            cmd = f"cdp datahub describe-recipe --profile {self.client.profile} --recipe-name {recipe_name}"
-            describe, err = run_command_json(
-                cmd,
+            describe, err = self.client.execute(
+                "datahub",
+                "describe-recipe",
                 task_name=f"Describing datalake recipe {recipe_name}",
-                debug=self.config.debug
+                recipe_name=recipe_name,
             )
             
             if describe:
@@ -334,18 +333,19 @@ class DatalakeDiscovery:
                 log(f"⚠️ Failed to describe datalake recipe: {recipe_name}")
     
     def _check_upgrade_images(self, datalake_crn, datalake_name, dl_dir, output_prefix):
-        """Check available upgrade images for datalake."""
+        """Check available upgrade images for datalake (--show-* flags only list, never upgrade)."""
         upgrades = [
-            ("AvailableImages", "Checking available upgrade images", "--show-available-images"),
-            ("RunTimeAvailableImages", "Checking latest runtime image", "--show-latest-available-image-per-runtime")
+            ("AvailableImages", "Checking available upgrade images", "show_available_images"),
+            ("RunTimeAvailableImages", "Checking latest runtime image", "show_latest_available_image_per_runtime")
         ]
-        
+
         for suffix, label, upgrade_flag in upgrades:
-            cmd = f"cdp datalake upgrade-datalake --profile {self.client.profile} {upgrade_flag} --datalake-name {datalake_crn}"
-            upgrade_json, upgrade_err = run_command_json(
-                cmd,
+            upgrade_json, upgrade_err = self.client.execute(
+                "datalake",
+                "upgrade-datalake",
                 task_name=f"{label} for datalake {datalake_name}",
-                debug=self.config.debug
+                datalake_name=datalake_crn,
+                **{upgrade_flag: True},
             )
             
             if upgrade_json:
@@ -366,7 +366,8 @@ class DatalakeDiscovery:
         elif self.config.debug:
             log(f"DEBUG: datalake diagnostics list for {datalake_name}: {diag_err}")
 
-        backups_json, backups_err = self.client.list_datalake_backups(datalake_crn)
+        # list-datalake-backups resolves --datalake-name by name only (a CRN returns NOT_FOUND)
+        backups_json, backups_err = self.client.list_datalake_backups(datalake_name)
         if backups_json:
             path = dl_dir / f"{output_prefix}_Backups_{self.config.timestamp}.json"
             save_to_file(backups_json, path)

@@ -448,7 +448,9 @@ def main(argv=None) -> int:
     try:
         args = parse_arguments(argv)
         if args.environment_name:
-            orchestrator = discover_single_environment(args, args.environment_name)
+            orchestrator = discover_single_environment(
+                args, args.environment_name, output_dir=args.output_dir
+            )
             if not args.no_archive:
                 create_archive(orchestrator.config.output_dir)
             log(f"\n🏁 Discovery complete! Output saved in: {orchestrator.config.output_dir}")

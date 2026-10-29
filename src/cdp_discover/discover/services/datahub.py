@@ -8,7 +8,6 @@ import json
 from cdp_discover.discover.utils import (
     check_expected_fields,
     log,
-    run_command_json,
     save_recipe_script,
     save_to_file,
 )
@@ -303,11 +302,11 @@ class DatahubDiscovery:
             log(f"⚠️ No clusterTemplateCrn found for {name}")
             return
         
-        cmd = f"cdp datahub describe-cluster-template --profile {self.client.profile} --cluster-template-name {template_crn}"
-        template, template_err = run_command_json(
-            cmd,
+        template, template_err = self.client.execute(
+            "datahub",
+            "describe-cluster-template",
             task_name=f"Describing template for {name}",
-            debug=self.config.debug
+            cluster_template_name=template_crn,
         )
         
         if not template:
@@ -340,18 +339,19 @@ class DatahubDiscovery:
             log(f"ℹ️ Skipping content extraction for {name} (SERVICE_MANAGED template)")
     
     def _check_upgrade_images(self, crn, name, cluster_dir, output_prefix):
-        """Check available upgrade images for cluster."""
+        """Check available upgrade images for cluster (--show-* flags only list, never upgrade)."""
         upgrades = [
-            ("AvailableImages", "Checking available upgrade images", "--show-available-images"),
-            ("RunTimeAvailableImages", "Checking latest runtime image", "--show-latest-available-image-per-runtime")
+            ("AvailableImages", "Checking available upgrade images", "show_available_images"),
+            ("RunTimeAvailableImages", "Checking latest runtime image", "show_latest_available_image_per_runtime")
         ]
-        
+
         for suffix, label, flag in upgrades:
-            cmd = f"cdp datahub upgrade-cluster --profile {self.client.profile} {flag} --cluster-name {crn}"
-            data, err = run_command_json(
-                cmd,
+            data, err = self.client.execute(
+                "datahub",
+                "upgrade-cluster",
                 task_name=f"{label} for {name}",
-                debug=self.config.debug
+                cluster_name=crn,
+                **{flag: True},
             )
             
             if data:
@@ -376,11 +376,11 @@ class DatahubDiscovery:
         
         
         for recipe_name in sorted(recipes_set):
-            cmd = f"cdp datahub describe-recipe --profile {self.client.profile} --recipe-name {recipe_name}"
-            describe, err = run_command_json(
-                cmd,
+            describe, err = self.client.execute(
+                "datahub",
+                "describe-recipe",
                 task_name=f"Describing recipe {recipe_name}",
-                debug=self.config.debug
+                recipe_name=recipe_name,
             )
             
             if describe:

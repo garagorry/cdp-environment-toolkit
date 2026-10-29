@@ -2,6 +2,7 @@
 """CDP CLI client wrapper for service discovery."""
 
 import os
+import shlex
 from pathlib import Path
 from cdp_discover.discover.cli_model import (
     MIN_CDP_CLI_VERSION,
@@ -130,19 +131,20 @@ class CDPClient:
             str: Complete command string
         """
         cmd_parts = [f"cdp {service} {operation}"]
-        cmd_parts.append(f"--profile {self.profile}")
-        
+        cmd_parts.append(f"--profile {shlex.quote(self.profile)}")
+
         for key, value in kwargs.items():
             # Skip None values - don't add them to the command
             if value is None:
                 continue
-            
+
             flag = key.replace("_", "-")
             if isinstance(value, bool):
                 if value:
                     cmd_parts.append(f"--{flag}")
             else:
-                cmd_parts.append(f"--{flag} {value}")
+                # Values come from API responses (CRNs, names); quote them for the shell
+                cmd_parts.append(f"--{flag} {shlex.quote(str(value))}")
         
         return " ".join(cmd_parts)
     
@@ -168,10 +170,16 @@ class CDPClient:
                 self.api_recorder.record(service, operation, command, success=False, skipped=reason)
             return None, f"skipped: {reason}"
         result, error = run_command_json(command, task_name=task_name, debug=self.debug)
-        if error and error.lstrip().startswith("usage:"):
-            # argparse dumps the whole usage text; keep the actual complaint
-            lines = [ln.strip() for ln in error.splitlines() if ln.strip()]
-            error = lines[-1] if lines else error
+        if error:
+            # Drop CLI log noise (e.g. the BETA-release banner) so the real error remains
+            lines = [
+                ln.strip() for ln in error.splitlines()
+                if ln.strip() and " - cdpcli." not in ln
+            ]
+            if lines and lines[0].startswith("usage:"):
+                # argparse dumps the whole usage text; keep the actual complaint
+                lines = lines[-1:]
+            error = "\n".join(lines) or error
         if self.api_recorder is not None:
             self.api_recorder.record(
                 service,

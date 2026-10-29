@@ -12,7 +12,6 @@ from pathlib import Path
 from cdp_discover.discover.utils import (
     check_expected_fields,
     log,
-    run_command_json,
     save_recipe_script,
     save_to_file,
 )
@@ -350,11 +349,11 @@ class CODDiscovery:
         
         for recipe_name in sorted(recipes_set):
             # Note: All recipes use 'cdp datahub describe-recipe' regardless of service type
-            cmd = f"cdp datahub describe-recipe --profile {self.client.profile} --recipe-name {recipe_name}"
-            describe, err = run_command_json(
-                cmd,
+            describe, err = self.client.execute(
+                "datahub",
+                "describe-recipe",
                 task_name=f"Describing COD recipe {recipe_name}",
-                debug=self.config.debug
+                recipe_name=recipe_name,
             )
             
             if describe:

@@ -4,7 +4,7 @@
 from pathlib import Path
 
 
-from cdp_discover.discover.utils import log, save_to_file, run_command_json, save_recipe_script
+from cdp_discover.discover.utils import log, save_to_file, save_recipe_script
 from cdp_discover.discover.exporters.csv_exporter import CSVExporter
 from cdp_discover.discover.diagnostics import save_diagnostic_collect
 class EnvironmentDiscovery:
@@ -291,11 +291,11 @@ class EnvironmentDiscovery:
         
         for recipe_name in recipes:
             # Note: All recipes use 'cdp datahub describe-recipe' regardless of service type
-            cmd = f"cdp datahub describe-recipe --profile {self.client.profile} --recipe-name {recipe_name}"
-            describe, err = run_command_json(
-                cmd,
+            describe, err = self.client.execute(
+                "datahub",
+                "describe-recipe",
                 task_name=f"Describing FreeIPA recipe {recipe_name}",
-                debug=self.config.debug
+                recipe_name=recipe_name,
             )
             
             if describe:
