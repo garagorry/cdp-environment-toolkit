@@ -63,6 +63,8 @@ _local/
 # Discovery output (never commit run artifacts)
 discovery_env_*/
 discovery_account-*/
+cde_inventory_*/
+cde_reports/
 *.tar.gz
 /environment/
 /datalake/

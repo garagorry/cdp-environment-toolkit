@@ -338,6 +338,15 @@ class CDPClient:
             count=count,
         )
     
+    # IAM operations (caller identity)
+    def get_current_user(self):
+        """Describe the calling user (no --user-id); used for its workloadUsername."""
+        return self.execute(
+            "iam",
+            "get-user",
+            task_name="Getting current CDP user",
+        )
+
     # CDE operations
     def list_cde_services(self):
         """List CDE services (account-wide; deleted services filtered out)."""
