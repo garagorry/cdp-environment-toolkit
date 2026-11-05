@@ -1,6 +1,7 @@
 # CDP Environment Toolkit
 
-Discover Cloudera Data Platform (CDP) environment resources and generate upgrade-planning Excel reports.
+Discover Cloudera Data Platform (CDP) environment resources, generate upgrade-planning Excel
+reports, and inventory CDE jobs across virtual clusters for upgrade impact.
 
 Installable CLI: **`cdp-discover`** (Python package `cdp_discover`). This repository was formerly
 [`cdp-discovery-tool`](https://github.com/garagorry/cdp-environment-toolkit); GitHub redirects old URLs.
@@ -51,15 +52,48 @@ cdp-discover generate \
   --no-prompt
 ```
 
+### CDE job inventory (multi-cluster)
+
+Finds every CDE service and virtual cluster in the environment(s). It then reads all job
+definitions from each VC's jobs API and writes a Runtime 7.3.2 / CDE 1.26+ upgrade-impact report.
+
+```bash
+# Live discovery; prompts once for the CDP workload password (or set CDE_WORKLOAD_PASSWORD)
+cdp-discover cde-inventory --environment-name <env>
+cdp-discover cde-inventory --environment-name dev-env --environment-name prod-env
+cdp-discover cde-inventory --all-environments
+
+# Reuse an earlier `discover` run instead of calling the CDP CLI again
+cdp-discover cde-inventory --discovery-dir /tmp/discovery_env_<env>-<ts> --workload-user <wl-user>
+
+# Preview the target VCs and token endpoints without calling any CDE API
+cdp-discover cde-inventory --environment-name <env> --dry-run
+```
+
+Output goes to `/tmp/cde_inventory_<scope>-<ts>/`:
+- `cde_job_inventory.csv` / `.json`: one row per job
+- `cde_vc_summary.csv`: job counts per VC by worst severity
+- `inventory_manifest.json`: run metadata, plus skipped or failed VCs with the reason
+- `CDE_UpgradeImpact_<env>.xlsx`: executive workbook (needs the `report` extra; `--no-excel` skips it)
+
+Rebuild or merge workbooks from existing output with `cdp-discover cde-report --inventory-dir <dir> [--inventory-dir <dir2>]`.
+
+- Step-by-step execution options: [docs/cde-inventory-playbook.md](docs/cde-inventory-playbook.md)
+- Rules, data flow and security notes: [src/cdp_discover/cde_inventory/README.md](src/cdp_discover/cde_inventory/README.md)
+
 ## Project layout (published)
 
 ```
 cdp-environment-toolkit/
 ├── pyproject.toml
 ├── src/cdp_discover/       # discover + generate implementation
+│   └── cde_inventory/      # cde-inventory / cde-report subcommands (see its README)
+├── docs/
+│   └── cde-inventory-playbook.md
 ├── tests/                  # pytest (pip install -e ".[dev]"; pytest)
 └── scripts/
     ├── run_discovery.sh
+    ├── run_cde_inventory.sh  # cde-inventory wrapper: checks, password prompt, summary
     └── sdk_coverage.py     # --local-model: check client.py calls against the installed CLI model
 ```
 

@@ -194,9 +194,14 @@ _SENSITIVE_KEY_FRAGMENTS = (
 )
 
 
-def _is_sensitive_key(key: str) -> bool:
+def is_sensitive_key(key: str) -> bool:
+    """True when a key name looks like it holds a secret (password, token, key, ...)."""
     lowered = key.lower().replace("-", "").replace("_", "")
     return any(fragment.replace("_", "") in lowered for fragment in _SENSITIVE_KEY_FRAGMENTS)
+
+
+# Backwards-compatible private alias
+_is_sensitive_key = is_sensitive_key
 
 
 def redact_sensitive(data):
@@ -204,7 +209,7 @@ def redact_sensitive(data):
     if isinstance(data, dict):
         out = {}
         for key, value in data.items():
-            if _is_sensitive_key(str(key)):
+            if is_sensitive_key(str(key)):
                 out[key] = "[REDACTED]"
             else:
                 out[key] = redact_sensitive(value)
